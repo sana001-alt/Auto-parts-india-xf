@@ -38,14 +38,16 @@ import {
   CheckCircle2,
   Check,
   Bell,
-  Navigation
+  Navigation,
+  Edit3,
+  Trash2
 } from "lucide-react";
 import { SparePart, INDIAN_CAR_BRANDS, CAR_PART_CATEGORIES, CAR_SPARE_PARTS_BY_CATEGORY, POPULAR_LOCATIONS, User, Banner } from "../types";
 import { INDIAN_STATES_AND_DISTRICTS } from "../data/indianLocations";
 import { motion, AnimatePresence } from "motion/react";
 import ImageGalleryModal from "./ImageGalleryModal";
 import PullToRefresh from "./PullToRefresh";
-import { fetchSellerReviews, deleteSparePartListing, updateSparePartListing, subscribeToBanners, subscribeToTaxonomyConfig, FullTaxonomyConfig } from "../lib/firebase";
+import { fetchSellerReviews, deleteSparePartListing, updateSparePartListing, subscribeToBanners, subscribeToTaxonomyConfig, FullTaxonomyConfig, auth } from "../lib/firebase";
 import SellerProfileView from "./SellerProfileView";
 import EditListingModal from "./EditListingModal";
 import UserAvatar from "./UserAvatar";
@@ -352,9 +354,12 @@ export default function HomeScreen({
       if (ok) {
         setEditingPart(null);
         setSelectedPart(prev => prev && prev.id === partId ? { ...prev, ...updates } : prev);
+        showToast("Listing updated successfully");
       }
     } catch (err: any) {
       setDeleteError(err.message || "Failed to update listing.");
+      showToast("Error updating listing: " + (err.message || String(err)), "error");
+      throw err;
     }
   };
   
@@ -392,7 +397,9 @@ export default function HomeScreen({
       const stored = localStorage.getItem("autoparts_recently_viewed_ids") || "[]";
       const ids: string[] = JSON.parse(stored);
       if (ids.length > 0 && parts.length > 0) {
-        const matched = ids.map(id => parts.find(p => p.id === id)).filter((p): p is SparePart => p !== undefined);
+        const matched = ids
+          .map(id => parts.find(p => p.id === id))
+          .filter((p): p is SparePart => p !== undefined && !p.sold && p.status !== "sold" && !(p as any).isDeleted);
         setRecentlyViewed(matched);
       }
     } catch (e) {
@@ -419,10 +426,20 @@ export default function HomeScreen({
     return () => clearInterval(timer);
   }, [firestoreBanners.length]);
 
+  // Search and Multi-tier Fallback Filter Logic
+  const activeParts = React.useMemo(() => {
+    return parts.filter((part) => {
+      const isSold = part.sold === true || part.status === "sold";
+      const isExpired = (Date.now() - part.createdAt) > 90 * 24 * 60 * 60 * 1000;
+      const isDeleted = (part as any).isDeleted === true;
+      return !isSold && !isExpired && !isDeleted;
+    });
+  }, [parts]);
+
   // Compute Top Verified Sellers
   const topSellers = React.useMemo(() => {
     const map = new Map<string, { sellerId: string; sellerName: string; location: string; count: number; sampleImage?: string }>();
-    parts.forEach(p => {
+    activeParts.forEach(p => {
       if (!p.contactName) return;
       const key = p.sellerId || p.contactName;
       const existing = map.get(key);
@@ -440,7 +457,7 @@ export default function HomeScreen({
       }
     });
     return Array.from(map.values()).slice(0, 6);
-  }, [parts]);
+  }, [activeParts]);
 
   React.useEffect(() => {
     const updateRating = () => {
@@ -472,15 +489,6 @@ export default function HomeScreen({
   const ALL_SPARE_PART_NAMES = React.useMemo(() => Object.values(taxonomy.subcategories || {}).flat(), [taxonomy.subcategories]);
   const ALL_BRANDS = React.useMemo(() => Object.keys(brands), [brands]);
   const ALL_MODELS = React.useMemo(() => Object.values(brands).flat() as string[], [brands]);
-
-  // Search and Multi-tier Fallback Filter Logic
-  const activeParts = React.useMemo(() => {
-    return parts.filter((part) => {
-      const isSold = part.sold === true;
-      const isExpired = (Date.now() - part.createdAt) > 90 * 24 * 60 * 60 * 1000;
-      return !isSold && !isExpired;
-    });
-  }, [parts]);
 
   // Effective center coordinates based on GPS or selected state/district
   const effectiveUserCoords = React.useMemo<LatLng | null>(() => {
@@ -1578,7 +1586,7 @@ export default function HomeScreen({
             </div>
 
             {/* Scrollable Content */}
-            <div className="flex-1 overflow-y-auto pb-28 scrollbar-none bg-slate-50 dark:bg-slate-950">
+            <div className="flex-1 overflow-y-auto pb-44 scrollbar-none bg-slate-50 dark:bg-slate-950">
               {/* Cover Image Carousel */}
               {(() => {
                 const imageList: string[] = [];
@@ -1851,85 +1859,117 @@ export default function HomeScreen({
               </div>
             )}
 
-            {/* Sticky Bottom Call / Chat Action Bar */}
-            <div className="absolute bottom-0 inset-x-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 p-3 flex items-center gap-3 z-20 shadow-[0_-4px_16px_rgba(0,0,0,0.06)]">
-              {currentUser && (selectedPart.sellerId === currentUser.id || currentUser.role === "super_admin" || currentUser.email === "wwwautoparts2@gmail.com" || currentUser.email === "ym1950394@gmail.com") ? (
-                <>
-                  <button
-                    onClick={() => {
-                      setEditingPart(selectedPart);
-                    }}
-                    className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer"
-                    id="edit-own-listing-btn"
-                  >
-                    Edit Listing
-                  </button>
-                  <button
-                    onClick={async () => {
-                      if (window.confirm("Are you sure you want to permanently delete this listing? This will delete images and data from everywhere.")) {
-                        try {
-                          setIsDeletingPart(true);
-                          const targetId = selectedPart.id;
-                          setIsDeletingPart(true);
-                          const ok = await deleteSparePartListing(targetId);
-                          if (ok) {
-                            setEditingPart(null);
-                            setSelectedPart(null);
-                            if (onPartDeleted) {
-                              onPartDeleted(targetId);
-                            }
+            {/* Sticky Bottom Call / Chat Action Bar - Elevated above bottom nav bar */}
+            <div 
+              className="absolute bottom-[66px] sm:bottom-[70px] inset-x-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 p-3 flex items-center gap-3 z-30 shadow-[0_-6px_20px_rgba(0,0,0,0.08)]"
+              id="ad-details-action-bar-hs"
+            >
+              {(() => {
+                const currentUid = auth?.currentUser?.uid || currentUser?.uid || currentUser?.id || null;
+                const currentEmail = (auth?.currentUser?.email || currentUser?.email || "").toLowerCase();
+                const listingOwnerId = selectedPart.ownerId || (selectedPart as any).sellerId || (selectedPart as any).userId || null;
+                const listingSellerEmail = (selectedPart.sellerEmail || "").toLowerCase();
+
+                const isOwner = Boolean(
+                  (currentUid && listingOwnerId && (currentUid === listingOwnerId || String(currentUid) === String(listingOwnerId))) ||
+                  (currentEmail && listingSellerEmail && currentEmail === listingSellerEmail) ||
+                  currentUser?.isAdmin ||
+                  currentUser?.isSuperAdmin ||
+                  currentUser?.role === "admin" ||
+                  currentEmail === "wwwautoparts2@gmail.com" ||
+                  currentEmail === "ym1950394@gmail.com" ||
+                  currentEmail === "www.allahforgiveness877@gmail.com"
+                );
+
+                if (isOwner) {
+                  return (
+                    <>
+                      <button
+                        onClick={() => {
+                          setEditingPart(selectedPart);
+                        }}
+                        className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer"
+                        id="edit-own-listing-btn"
+                      >
+                        <Edit3 size={15} />
+                        <span>Edit Listing</span>
+                      </button>
+                      <button
+                        onClick={async () => {
+                          if (window.confirm("Are you sure you want to permanently delete this listing? This will delete images and data from everywhere.")) {
                             try {
-                              window.history.replaceState({ index: 0, screen: { type: "tab", tab: "home" } }, "", "/");
-                            } catch (e) {}
-                            showToast("Listing deleted successfully");
-                          } else {
-                            showToast("Failed to delete listing.", "error");
+                              setIsDeletingPart(true);
+                              const targetId = selectedPart.id;
+                              const ok = await deleteSparePartListing(targetId);
+                              if (ok) {
+                                setEditingPart(null);
+                                setSelectedPart(null);
+                                if (onPartDeleted) {
+                                  onPartDeleted(targetId);
+                                }
+                                try {
+                                  window.history.replaceState({ index: 0, screen: { type: "tab", tab: "home" } }, "", "/");
+                                } catch (e) {}
+                                showToast("Listing deleted successfully");
+                              } else {
+                                showToast("Failed to delete listing.", "error");
+                              }
+                            } catch (err: any) {
+                              showToast("Error deleting listing: " + (err.message || String(err)), "error");
+                            } finally {
+                              setIsDeletingPart(false);
+                            }
                           }
-                        } catch (err: any) {
-                          showToast("Error deleting listing: " + (err.message || String(err)), "error");
-                        } finally {
-                          setIsDeletingPart(false);
-                        }
-                      }
-                    }}
-                    disabled={isDeletingPart}
-                    className="flex-1 flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-500 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
-                    id="delete-own-listing-btn"
-                  >
-                    {isDeletingPart ? "Deleting..." : "Delete Listing"}
-                  </button>
-                </>
-              ) : (
-                <>
-                  {onStartChat && (
+                        }}
+                        disabled={isDeletingPart}
+                        className="flex-1 flex items-center justify-center gap-2 bg-rose-600 hover:bg-rose-500 text-white py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer disabled:opacity-50"
+                        id="delete-own-listing-btn"
+                      >
+                        <Trash2 size={15} />
+                        <span>{isDeletingPart ? "Deleting..." : "Delete Listing"}</span>
+                      </button>
+                    </>
+                  );
+                }
+
+                return (
+                  <>
                     <button
                       onClick={() => {
                         if (selectedPart.sold) return;
-                        onStartChat(selectedPart);
-                        setSelectedPart(null); // Close the detail drawer so the chat window overlay is visible
+                        if (onStartChat) {
+                          onStartChat(selectedPart);
+                        }
+                        setSelectedPart(null);
                       }}
                       disabled={selectedPart.sold}
-                      className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer ${
+                      className={`flex-1 flex items-center justify-center gap-2 py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] cursor-pointer ${
                         selectedPart.sold
                           ? "bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed opacity-60"
                           : "bg-teal-600 hover:bg-teal-500 text-white"
                       }`}
                       id="inapp-chat-btn"
                     >
-                      <MessageSquare size={14} />
-                      {selectedPart.sold ? t("soldOut") : "Chat Now"}
+                      <MessageSquare size={15} />
+                      <span>{selectedPart.sold ? t("soldOut") : "Chat Now"}</span>
                     </button>
-                  )}
-                  <a
-                    href={`tel:${selectedPart.contactPhone}`}
-                    className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] text-center"
-                    id="call-seller-btn"
-                  >
-                    <Phone size={13} />
-                    {t("callSeller")}
-                  </a>
-                </>
-              )}
+                    <a
+                      href={selectedPart.contactPhone ? `tel:${selectedPart.contactPhone}` : undefined}
+                      onClick={(e) => {
+                        if (!selectedPart.contactPhone) {
+                          e.preventDefault();
+                          alert("No contact phone provided for this seller.");
+                        }
+                      }}
+                      className="flex-1 flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-500 text-white py-3 px-3 rounded-xl font-black text-xs uppercase tracking-wider shadow-xs transition-all active:scale-[0.98] text-center cursor-pointer"
+                      id="call-seller-btn"
+                    >
+                      <Phone size={15} />
+                      <span>{t("callSeller")}</span>
+                    </a>
+                  </>
+                );
+              })()}
             </div>
           </motion.div>
         )}

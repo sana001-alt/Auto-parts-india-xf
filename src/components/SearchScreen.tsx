@@ -99,6 +99,12 @@ export default function SearchScreen({
 
   const filteredParts = useMemo(() => {
     return parts.filter((part) => {
+      // Exclude sold, expired, or deleted parts from search
+      const isSold = part.sold === true || part.status === "sold";
+      const isExpired = (Date.now() - part.createdAt) > 90 * 24 * 60 * 60 * 1000;
+      const isDeleted = (part as any).isDeleted === true;
+      if (isSold || isExpired || isDeleted) return false;
+
       // Search text query matching
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase();

@@ -36,6 +36,8 @@
         "imageUrl": { "type": "string" },
         "sellerId": { "type": "string" },
         "sellerEmail": { "type": "string" },
+        "sold": { "type": "boolean" },
+        "status": { "type": "string" },
         "createdAt": { "type": "integer" }
       },
       "required": ["id", "title", "description", "price", "carBrand", "carModel", "category", "condition", "location", "contactName", "contactPhone", "imageUrl", "sellerId", "sellerEmail", "createdAt"]

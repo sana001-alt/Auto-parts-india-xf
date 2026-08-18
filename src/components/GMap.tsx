@@ -194,12 +194,12 @@ export default function GMap({
     }
   }, [coords]);
 
-  // Open OpenStreetMap search/directions with exact coordinates
+  // Open external Google Maps directly with dynamic listing coordinates and directions support
   const handleOpenMapDirections = (e?: React.MouseEvent) => {
     if (e) {
       e.stopPropagation();
     }
-    const url = `https://www.openstreetmap.org/?mlat=${coords.lat}&mlon=${coords.lng}#map=16/${coords.lat}/${coords.lng}`;
+    const url = `https://www.google.com/maps/dir/?api=1&destination=${coords.lat},${coords.lng}`;
     window.open(url, "_blank", "noopener,noreferrer");
   };
 
@@ -291,7 +291,7 @@ export default function GMap({
             onClick={handleOpenMapDirections}
             className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 active:scale-95 text-white font-bold text-[11px] px-3 py-1.5 rounded-xl shadow-md transition-all cursor-pointer"
             id="map-open-directions-btn"
-            title="Open in OpenStreetMap"
+            title="Open in Google Maps"
           >
             <Navigation size={12} className="fill-white" />
             <span>Open in Maps</span>

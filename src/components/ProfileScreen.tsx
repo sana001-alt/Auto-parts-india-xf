@@ -58,7 +58,8 @@ import {
   deleteUserProfilePhoto,
   updateUserProfile,
   subscribeToUserProfile,
-  fetchUserFollowCounts
+  fetchUserFollowCounts,
+  auth
 } from "../lib/firebase";
 import { CURRENT_APP_VERSION, compareVersions } from "../utils/versionUtils";
 import EditListingModal from "./EditListingModal";
@@ -463,7 +464,16 @@ export default function ProfileScreen({
   };
 
   // Filter listings
-  const myParts = parts.filter(p => p.sellerId === currentUser.id);
+  const currentUid = currentUser?.uid || currentUser?.id || auth?.currentUser?.uid || null;
+  const currentEmail = (currentUser?.email || auth?.currentUser?.email || "").toLowerCase();
+  const myParts = parts.filter(p => {
+    const ownerId = p.ownerId || p.sellerId || (p as any).userId || null;
+    const sellerEmail = (p.sellerEmail || "").toLowerCase();
+    return Boolean(
+      (currentUid && ownerId && (currentUid === ownerId || String(currentUid) === String(ownerId))) ||
+      (currentEmail && sellerEmail && currentEmail === sellerEmail)
+    );
+  });
   const favParts = parts.filter(p => favorites.includes(p.id));
 
   // Cascading Location Helpers for Editing Profile Default Location
@@ -510,9 +520,16 @@ export default function ProfileScreen({
 
   const handleSaveListingChanges = async (partId: string, updates: Partial<SparePart>) => {
     try {
-      await updateSparePartListing(partId, updates);
-    } catch (e) {
+      const ok = await updateSparePartListing(partId, updates);
+      if (ok) {
+        setEditingPart(null);
+        setDeleteSuccess("Listing updated successfully");
+        setTimeout(() => setDeleteSuccess(null), 4000);
+      }
+    } catch (e: any) {
       console.error("Save listing changes failed:", e);
+      setDeleteError(e.message || "Failed to update listing.");
+      throw e;
     }
   };
 
@@ -939,7 +956,7 @@ export default function ProfileScreen({
       {activeSubScreen === "personal_info" && (() => {
         const now = Date.now();
         const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
-        const activeMyParts = myParts.filter(p => p.sold !== true && (now - p.createdAt) <= ninetyDaysMs);
+        const activeMyParts = myParts.filter(p => p.sold !== true && p.status !== "sold" && !(p as any).isDeleted && (now - p.createdAt) <= ninetyDaysMs);
 
         return (
           <div className="flex-1 flex flex-col animate-fade-in bg-slate-50 min-h-0 overflow-y-auto" id="profile-sub-personal-info">
@@ -1248,9 +1265,9 @@ export default function ProfileScreen({
         const now = Date.now();
         const ninetyDaysMs = 90 * 24 * 60 * 60 * 1000;
         
-        const activeMyParts = myParts.filter(p => p.sold !== true && (now - p.createdAt) <= ninetyDaysMs);
-        const soldMyParts = myParts.filter(p => p.sold === true);
-        const expiredMyParts = myParts.filter(p => p.sold !== true && (now - p.createdAt) > ninetyDaysMs);
+        const activeMyParts = myParts.filter(p => p.sold !== true && p.status !== "sold" && !(p as any).isDeleted && (now - p.createdAt) <= ninetyDaysMs);
+        const soldMyParts = myParts.filter(p => (p.sold === true || p.status === "sold") && !(p as any).isDeleted);
+        const expiredMyParts = myParts.filter(p => p.sold !== true && p.status !== "sold" && !(p as any).isDeleted && (now - p.createdAt) > ninetyDaysMs);
 
         const currentTabParts = myAdsTab === "active" 
           ? activeMyParts 
@@ -1499,11 +1516,24 @@ export default function ProfileScreen({
                             </>
                           ) : (
                             <>
-                              <div>
+                              <div className="flex items-center gap-2">
                                 {myAdsTab === "sold" ? (
-                                  <span className="text-[10px] font-extrabold text-rose-600 bg-rose-50 px-2.5 py-1 rounded-full uppercase tracking-wider">
-                                    Sold Section
-                                  </span>
+                                  <>
+                                    <span className="text-[10px] font-black text-rose-600 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-full uppercase tracking-wider">
+                                      Sold
+                                    </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        onToggleSold && onToggleSold(part.id);
+                                      }}
+                                      className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-[9px] font-black uppercase tracking-wider transition-all cursor-pointer"
+                                      id={`reactivate-btn-${part.id}`}
+                                      title="Reactivate Listing"
+                                    >
+                                      Mark Active
+                                    </button>
+                                  </>
                                 ) : (
                                   <span className="text-[10px] font-extrabold text-amber-600 bg-amber-50 px-2.5 py-1 rounded-full uppercase tracking-wider">
                                     Expired Ad
@@ -1511,7 +1541,7 @@ export default function ProfileScreen({
                                 )}
                               </div>
 
-                              {/* Delete button (only action for Sold and Expired ads) */}
+                              {/* Delete button (available for Sold and Expired ads) */}
                               <button
                                 onClick={() => setDeleteConfirmId(part.id)}
                                 disabled={isDeletingId === part.id}

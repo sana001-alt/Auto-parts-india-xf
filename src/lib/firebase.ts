@@ -88,6 +88,8 @@ let db: any = null;
 let storage: any = null;
 let useFirebase = false;
 
+export { auth, db, storage, useFirebase };
+
 if (isFirebaseConfigured) {
   try {
     app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
@@ -591,9 +593,12 @@ export async function fetchSpareParts(): Promise<SparePart[]> {
       if (!snapshot.empty) {
         snapshot.forEach((docSnapshot) => {
           const data = docSnapshot.data();
+          const ownerId = data.ownerId || data.sellerId || data.userId || null;
           firestoreParts.push({ 
             ...data, 
             id: docSnapshot.id,
+            ownerId: ownerId || undefined,
+            sellerId: data.sellerId || ownerId || "",
             createdAt: convertTimestampToNumber(data.createdAt)
           } as SparePart);
         });
@@ -712,6 +717,7 @@ export async function createSparePartListing(part: Omit<SparePart, "id" | "creat
         images: urlsToProcess.filter(Boolean),
         imagePublicIds: publicIds,
         public_ids: publicIds,
+        ownerId: currentUser.uid, // Explicitly set to current authenticated user ID
         sellerId: currentUser.uid, // Explicitly set to current authenticated user ID
         sellerEmail: currentUser.email || part.sellerEmail,
         sellerPhoto: part.sellerPhoto || (currentUser as any)?.photoURL || (currentUser as any)?.profilePhoto || "",
@@ -843,9 +849,12 @@ export function subscribeToSpareParts(
         if (!snapshot.empty) {
           snapshot.forEach((docSnapshot) => {
             const data = docSnapshot.data();
+            const ownerId = data.ownerId || data.sellerId || data.userId || null;
             firestoreParts.push({
               ...data,
               id: docSnapshot.id,
+              ownerId: ownerId || undefined,
+              sellerId: data.sellerId || ownerId || "",
               createdAt: convertTimestampToNumber(data.createdAt)
             } as SparePart);
           });
@@ -899,6 +908,8 @@ export function subscribeToSpareParts(
 }
 
 export async function deleteSparePartListing(partId: string): Promise<boolean> {
+  if (!partId) return false;
+
   if (partId.startsWith("local-part-")) {
     const localData = localStorage.getItem(LOCAL_STORAGE_PARTS_KEY);
     if (localData) {
@@ -915,7 +926,7 @@ export async function deleteSparePartListing(partId: string): Promise<boolean> {
     try {
       const docRef = doc(db, "products", "listings", "items", partId);
       
-      // Step 1: Fetch document first to retrieve Cloudinary public IDs, image URLs, and Firebase Storage URLs
+      // Step 1: Fetch document to retrieve all Cloudinary public IDs, image URLs, and Firebase Storage URLs
       let pidsToDelete: string[] = [];
       let firebaseStorageUrls: string[] = [];
       try {
@@ -926,12 +937,12 @@ export async function deleteSparePartListing(partId: string): Promise<boolean> {
         );
         if (docSnap.exists()) {
           const data = docSnap.data();
-          const pids = data.imagePublicIds || [];
+          const pids = data.imagePublicIds || data.public_ids || [];
           
           const extractedPids: string[] = [];
-          const urls = [data.imageUrl, ...(data.imageUrls || [])];
+          const urls = [data.imageUrl, ...(data.imageUrls || []), ...(data.images || [])];
           for (const url of urls) {
-            if (url) {
+            if (url && typeof url === "string") {
               if (url.includes("firebasestorage.googleapis.com") || url.includes("storage.googleapis.com")) {
                 firebaseStorageUrls.push(url);
               }
@@ -944,13 +955,14 @@ export async function deleteSparePartListing(partId: string): Promise<boolean> {
           pidsToDelete = Array.from(new Set([...pids, ...extractedPids]));
         }
       } catch (getErr) {
-        console.warn("Could not fetch document before deletion, proceeding directly with document deletion:", getErr);
+        console.warn("Could not fetch document details before deletion:", getErr);
       }
 
-      // Step 2: Attempt non-blocking Cloudinary image cleanup
+      // Step 2: Attempt Cloudinary image cleanup
       if (pidsToDelete.length > 0) {
         try {
           await deleteImagesFromCloudinary(pidsToDelete);
+          console.log(`[Cloudinary Cleanup] Triggered deletion for ${pidsToDelete.length} image(s) from listing ${partId}.`);
         } catch (cloudErr) {
           console.warn("Cloudinary cleanup failed non-fatally, proceeding with Firestore document deletion:", cloudErr);
         }
@@ -968,36 +980,22 @@ export async function deleteSparePartListing(partId: string): Promise<boolean> {
         }
       }
 
-      // Step 4: Delete all linked references across Firestore collections (favorites, notifications, reports, chats)
-      try {
-        const [favSnap, notifSnap, reportSnap, chatSnap] = await Promise.all([
-          getDocs(query(collection(db, "favorites"), where("partId", "==", partId))),
-          getDocs(query(collection(db, "notifications"), where("partId", "==", partId))),
-          getDocs(query(collection(db, "reports"), where("partId", "==", partId))),
-          getDocs(query(collection(db, "chats"), where("partId", "==", partId)))
-        ]);
-
-        const deletePromises: Promise<void>[] = [];
-        favSnap.forEach(d => deletePromises.push(deleteDoc(d.ref)));
-        notifSnap.forEach(d => deletePromises.push(deleteDoc(d.ref)));
-        reportSnap.forEach(d => deletePromises.push(deleteDoc(d.ref)));
-
-        for (const chatDoc of chatSnap.docs) {
-          try {
-            const msgSnap = await getDocs(collection(db, "chats", chatDoc.id, "messages"));
-            msgSnap.forEach(mDoc => deletePromises.push(deleteDoc(mDoc.ref)));
-          } catch (mErr) {
-            console.warn(`Failed to fetch messages for chat ${chatDoc.id}:`, mErr);
-          }
-          deletePromises.push(deleteDoc(chatDoc.ref));
+      // Step 4: Clean up authenticated user's own favorite reference for this part if any
+      if (auth?.currentUser) {
+        try {
+          const userFavSnap = await getDocs(
+            query(
+              collection(db, "favorites"),
+              where("userId", "==", auth.currentUser.uid),
+              where("partId", "==", partId)
+            )
+          );
+          userFavSnap.forEach(d => {
+            deleteDoc(d.ref).catch(() => {});
+          });
+        } catch (e) {
+          // non-fatal
         }
-
-        if (deletePromises.length > 0) {
-          await Promise.all(deletePromises);
-          console.log(`[Firestore Delete] Deleted ${deletePromises.length} linked reference documents for listing ${partId}.`);
-        }
-      } catch (refErr) {
-        console.warn("Linked references cleanup failed non-fatally:", refErr);
       }
 
       // Step 5: Primary operation: Delete document from Firestore
@@ -1075,67 +1073,118 @@ export async function deleteSparePartListing(partId: string): Promise<boolean> {
 }
 
 export async function updateSparePartListing(partId: string, updates: Partial<SparePart>): Promise<boolean> {
+  if (!partId) return false;
+
   if (useFirebase && db && !partId.startsWith("local-part-")) {
     const path = `products/listings/items/${partId}`;
     try {
       const docRef = doc(db, "products", "listings", "items", partId);
       
-      // Sanitize updates object to remove any undefined properties
+      // Sanitize updates object to remove undefined properties and strip out root doc id field
       const cleanUpdates: Record<string, any> = {};
       for (const [key, val] of Object.entries(updates)) {
-        if (val !== undefined) {
+        if (val !== undefined && key !== "id") {
           cleanUpdates[key] = val;
         }
       }
 
-      // If imageUrl or imageUrls are updated, compute new public IDs and clean up orphaned ones from Cloudinary
-      if (cleanUpdates.imageUrl || cleanUpdates.imageUrls) {
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          const oldData = docSnap.data();
-          const oldPids = oldData.imagePublicIds || [];
-          const extractedOldPids: string[] = [];
-          const oldUrls = [oldData.imageUrl, ...(oldData.imageUrls || [])];
-          for (const url of oldUrls) {
-            if (url) {
-              const pid = extractPublicId(url);
-              if (pid && !extractedOldPids.includes(pid)) {
-                extractedOldPids.push(pid);
-              }
-            }
-          }
-          const allOldPids = Array.from(new Set([...oldPids, ...extractedOldPids]));
+      // Maintain images / imageUrls synchronization
+      if (cleanUpdates.imageUrls && !cleanUpdates.images) {
+        cleanUpdates.images = cleanUpdates.imageUrls;
+      } else if (cleanUpdates.images && !cleanUpdates.imageUrls) {
+        cleanUpdates.imageUrls = cleanUpdates.images;
+      }
 
-          // Compute new public IDs
-          const newUrls = [cleanUpdates.imageUrl || oldData.imageUrl, ...(cleanUpdates.imageUrls || oldData.imageUrls || [])];
-          const newPids: string[] = [];
-          for (const url of newUrls) {
-            if (url) {
-              const pid = extractPublicId(url);
-              if (pid && !newPids.includes(pid)) {
-                newPids.push(pid);
-              }
-            }
-          }
-          cleanUpdates.imagePublicIds = newPids;
-
-          // Find old public IDs that are no longer in new public IDs (orphaned)
-          const orphanedPids = allOldPids.filter((pid: string) => !newPids.includes(pid));
-          if (orphanedPids.length > 0) {
-            try {
-              await deleteImagesFromCloudinary(orphanedPids);
-              console.log(`[Cloudinary Sync] Deleted ${orphanedPids.length} replaced image(s) from Cloudinary during listing update.`);
-            } catch (err) {
-              console.warn(`Failed to clean up orphaned image(s) during update:`, err);
-            }
-          }
+      // Synchronize sold status and timestamps
+      if (updates.sold !== undefined) {
+        cleanUpdates.sold = Boolean(updates.sold);
+        cleanUpdates.status = updates.sold ? "sold" : (updates.status || "active");
+        cleanUpdates.soldAt = updates.sold ? Date.now() : null;
+      } else if (updates.status !== undefined) {
+        cleanUpdates.status = updates.status;
+        if (updates.status === "sold") {
+          cleanUpdates.sold = true;
+          cleanUpdates.soldAt = Date.now();
+        } else if (updates.status === "active") {
+          cleanUpdates.sold = false;
+          cleanUpdates.soldAt = null;
         }
       }
 
-      await updateDoc(docRef, cleanUpdates);
+      // If imageUrl or imageUrls are updated, compute new public IDs and clean up orphaned ones from Cloudinary
+      if (cleanUpdates.imageUrl || cleanUpdates.imageUrls || cleanUpdates.images) {
+        try {
+          const docSnap = await getDoc(docRef);
+          if (docSnap.exists()) {
+            const oldData = docSnap.data();
+            const oldPids = oldData.imagePublicIds || oldData.public_ids || [];
+            const extractedOldPids: string[] = [];
+            const oldUrls = [oldData.imageUrl, ...(oldData.imageUrls || []), ...(oldData.images || [])];
+            for (const url of oldUrls) {
+              if (url && typeof url === "string") {
+                const pid = extractPublicId(url);
+                if (pid && !extractedOldPids.includes(pid)) {
+                  extractedOldPids.push(pid);
+                }
+              }
+            }
+            const allOldPids = Array.from(new Set([...oldPids, ...extractedOldPids]));
+
+            // Compute new public IDs
+            const newUrls = [
+              cleanUpdates.imageUrl || oldData.imageUrl,
+              ...(cleanUpdates.imageUrls || cleanUpdates.images || oldData.imageUrls || oldData.images || [])
+            ];
+            const newPids: string[] = [];
+            for (const url of newUrls) {
+              if (url && typeof url === "string") {
+                const pid = extractPublicId(url);
+                if (pid && !newPids.includes(pid)) {
+                  newPids.push(pid);
+                }
+              }
+            }
+            cleanUpdates.imagePublicIds = newPids;
+            cleanUpdates.public_ids = newPids;
+
+            // Find old public IDs that are no longer in new public IDs (orphaned)
+            const orphanedPids = allOldPids.filter((pid: string) => !newPids.includes(pid));
+            if (orphanedPids.length > 0) {
+              try {
+                await deleteImagesFromCloudinary(orphanedPids);
+                console.log(`[Cloudinary Sync] Deleted ${orphanedPids.length} replaced image(s) from Cloudinary during listing update.`);
+              } catch (err) {
+                console.warn(`Failed to clean up orphaned image(s) during update:`, err);
+              }
+            }
+          }
+        } catch (fetchErr) {
+          console.warn("Could not check old images before update:", fetchErr);
+        }
+      }
+
+      // Add updatedAt timestamp
+      cleanUpdates.updatedAt = serverTimestamp();
+
+      await withTimeout(
+        updateDoc(docRef, cleanUpdates),
+        10000,
+        "Firestore listing update timed out. Please check your connection and try again."
+      );
+
+      // Update local storage if cached
+      const localData = localStorage.getItem(LOCAL_STORAGE_PARTS_KEY);
+      if (localData) {
+        let partsList: SparePart[] = JSON.parse(localData);
+        partsList = partsList.map(p => p.id === partId ? { ...p, ...updates } : p);
+        localStorage.setItem(LOCAL_STORAGE_PARTS_KEY, JSON.stringify(partsList));
+      }
+
       window.dispatchEvent(new Event("autoparts_listings_updated"));
+      console.log(`[Firestore Update Success] Listing ${partId} updated successfully.`);
       return true;
     } catch (err: any) {
+      console.error(`[Firestore Update Failure] Error updating listing ${partId}:`, err);
       if (err?.code === "resource-exhausted" || err?.message?.includes("Quota limit exceeded") || err?.message?.includes("resource-exhausted")) {
         console.warn("[Firestore Quota Exceeded] Falling back to LocalStorage for update.");
         const localData = localStorage.getItem(LOCAL_STORAGE_PARTS_KEY);
@@ -1149,10 +1198,9 @@ export async function updateSparePartListing(partId: string, updates: Partial<Sp
       }
       if (err?.code === "permission-denied" || err?.message?.includes("permission") || err?.message?.includes("Missing or insufficient permissions")) {
         handleFirestoreError(err, OperationType.UPDATE, path);
-        throw err;
+        throw new Error("Permission denied: You do not have permission to edit this listing.");
       } else {
-        console.warn("Firestore update issue:", err);
-        throw err;
+        throw new Error(`Failed to update listing: ${err.message || String(err)}`);
       }
     }
   }
@@ -1163,9 +1211,18 @@ export async function updateSparePartListing(partId: string, updates: Partial<Sp
     let partsList: SparePart[] = JSON.parse(localData);
     partsList = partsList.map(p => p.id === partId ? { ...p, ...updates } : p);
     localStorage.setItem(LOCAL_STORAGE_PARTS_KEY, JSON.stringify(partsList));
+    window.dispatchEvent(new Event("autoparts_listings_updated"));
     return true;
   }
   return false;
+}
+
+export async function markSparePartSold(partId: string, sold: boolean = true): Promise<boolean> {
+  if (!partId) return false;
+  return updateSparePartListing(partId, {
+    sold: sold,
+    status: sold ? "sold" : "active"
+  });
 }
 
 // ----------------------------------------------------

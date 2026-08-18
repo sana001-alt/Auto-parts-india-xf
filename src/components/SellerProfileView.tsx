@@ -44,8 +44,8 @@ export default function SellerProfileView({
   const [followingCount, setFollowingCount] = useState(0);
 
   // Statistics & Filtering
-  const sellerParts = allParts.filter(p => p.sellerId === sellerId);
-  const activeAds = sellerParts.filter(p => !p.sold);
+  const sellerParts = allParts.filter(p => (p.sellerId === sellerId || p.ownerId === sellerId));
+  const activeAds = sellerParts.filter(p => !p.sold && p.status !== "sold" && !(p as any).isDeleted);
   const displayName = sellerProfile?.name || sellerProfile?.displayName || sellerName || "Seller";
   const displayPhoto = sellerProfile?.photoURL || sellerProfile?.profilePhoto || "";
   const refPart = activeAds[0] || sellerParts[0];

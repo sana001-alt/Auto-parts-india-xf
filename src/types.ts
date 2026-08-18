@@ -53,6 +53,8 @@ export interface SparePart {
   images?: string[];
   imagePublicIds?: string[];
   public_ids?: string[];
+  ownerId?: string;
+  userId?: string;
   sellerId: string;
   sellerEmail: string;
   sellerPhoto?: string;
@@ -62,7 +64,8 @@ export interface SparePart {
   featured?: boolean;
   verified?: boolean;
   approved?: boolean;
-  status?: "pending" | "approved" | "rejected" | "active";
+  status?: "pending" | "approved" | "rejected" | "active" | "sold";
+  soldAt?: number;
   isDeleted?: boolean;
   reported?: boolean;
   isDemo?: boolean;

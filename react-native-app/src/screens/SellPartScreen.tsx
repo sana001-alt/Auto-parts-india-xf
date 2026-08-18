@@ -64,8 +64,9 @@ export default function SellPartScreen({ navigation, user }: any) {
   };
 
   const handleSubmit = async () => {
-    if (!title || !carBrand || !carModel || !price) {
-      Alert.alert('Required Fields', 'Please fill in Part Title, Car Brand, Car Model, and Price.');
+    const cleanPrice = String(price).replace(/[^0-9.]/g, '');
+    if (!title || !carBrand || !carModel || !cleanPrice || Number(cleanPrice) <= 0) {
+      Alert.alert('Required Fields', 'Please fill in Part Title, Car Brand, Car Model, and a valid Price.');
       return;
     }
 
@@ -82,7 +83,7 @@ export default function SellPartScreen({ navigation, user }: any) {
         carModel,
         category,
         condition,
-        price: Number(price),
+        price: Number(cleanPrice),
         location,
         contactName,
         contactPhone,

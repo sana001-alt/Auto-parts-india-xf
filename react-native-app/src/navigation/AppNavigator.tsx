@@ -46,21 +46,9 @@ function TabNavigator({ user }: { user: any }) {
       </Tab.Screen>
 
       <Tab.Screen 
-        name="SellTab" 
-        options={{ 
-          title: 'Sell Part',
-          tabBarIcon: ({ color, size }) => (
-            <IconButton icon="plus-circle" iconColor={color} size={size} style={styles.iconBtn} />
-          )
-        }}
-      >
-        {(props) => <SellPartScreen {...props} user={user} />}
-      </Tab.Screen>
-
-      <Tab.Screen 
         name="ChatsTab" 
         options={{ 
-          title: 'Messages',
+          title: 'Chat',
           tabBarIcon: ({ color, size }) => (
             <IconButton icon="message-text" iconColor={color} size={size} style={styles.iconBtn} />
           )
@@ -70,9 +58,33 @@ function TabNavigator({ user }: { user: any }) {
       </Tab.Screen>
 
       <Tab.Screen 
+        name="SellTab" 
+        options={{ 
+          title: 'Sell',
+          tabBarIcon: ({ color, size }) => (
+            <IconButton icon="plus-circle" iconColor={color} size={size} style={styles.iconBtn} />
+          )
+        }}
+      >
+        {(props) => <SellPartScreen {...props} user={user} />}
+      </Tab.Screen>
+
+      <Tab.Screen 
+        name="MyAdsTab" 
+        options={{ 
+          title: 'My Ads',
+          tabBarIcon: ({ color, size }) => (
+            <IconButton icon="package-variant-closed" iconColor={color} size={size} style={styles.iconBtn} />
+          )
+        }}
+      >
+        {(props) => <ProfileScreen {...props} user={user} initialTab="my_listings" />}
+      </Tab.Screen>
+
+      <Tab.Screen 
         name="ProfileTab" 
         options={{ 
-          title: 'Profile',
+          title: 'Account',
           tabBarIcon: ({ color, size }) => (
             <IconButton icon="account" iconColor={color} size={size} style={styles.iconBtn} />
           )

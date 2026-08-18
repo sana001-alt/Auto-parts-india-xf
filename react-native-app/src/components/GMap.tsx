@@ -55,28 +55,40 @@ export const GMap: React.FC<GMapProps> = ({
     }
   };
 
-  const handleOpenNativeMaps = () => {
+  const handleOpenGoogleMaps = () => {
     const lat = currentLat;
     const lng = currentLng;
-    const label = encodeURIComponent(title || 'Spare Part Location');
+    const gmapsNavUrl = `google.navigation:q=${lat},${lng}`;
+    const gmapsWebUrl = `https://www.google.com/maps/dir/?api=1&destination=${lat},${lng}`;
 
-    const url = Platform.select({
-      ios: `maps:0,0?q=${label}@${lat},${lng}`,
-      android: `geo:${lat},${lng}?q=${lat},${lng}(${label})`,
-      default: `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=15/${lat}/${lng}`,
-    });
-
-    Linking.canOpenURL(url)
-      .then((supported) => {
-        if (supported) {
-          Linking.openURL(url);
-        } else {
-          Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
-        }
-      })
-      .catch(() => {
-        Linking.openURL(`https://www.google.com/maps/search/?api=1&query=${lat},${lng}`);
-      });
+    if (Platform.OS === 'android') {
+      Linking.canOpenURL(gmapsNavUrl)
+        .then((supported) => {
+          if (supported) {
+            Linking.openURL(gmapsNavUrl);
+          } else {
+            Linking.openURL(gmapsWebUrl);
+          }
+        })
+        .catch(() => {
+          Linking.openURL(gmapsWebUrl);
+        });
+    } else if (Platform.OS === 'ios') {
+      const iosGmapsUrl = `comgooglemaps://?daddr=${lat},${lng}&directionsmode=driving`;
+      Linking.canOpenURL(iosGmapsUrl)
+        .then((supported) => {
+          if (supported) {
+            Linking.openURL(iosGmapsUrl);
+          } else {
+            Linking.openURL(gmapsWebUrl);
+          }
+        })
+        .catch(() => {
+          Linking.openURL(gmapsWebUrl);
+        });
+    } else {
+      Linking.openURL(gmapsWebUrl);
+    }
   };
 
   const handleDetectGPS = async () => {
@@ -136,11 +148,11 @@ export const GMap: React.FC<GMapProps> = ({
         <View style={styles.controlsBar}>
           <TouchableOpacity
             style={styles.actionBtn}
-            onPress={handleOpenNativeMaps}
+            onPress={handleOpenGoogleMaps}
             activeOpacity={0.8}
           >
-            <IconButton icon="directions" iconColor="#FFFFFF" size={16} style={styles.btnIcon} />
-            <Text style={styles.actionBtnText}>Navigate</Text>
+            <IconButton icon="google-maps" iconColor="#FFFFFF" size={16} style={styles.btnIcon} />
+            <Text style={styles.actionBtnText}>Open in Maps</Text>
           </TouchableOpacity>
 
           {interactive && (

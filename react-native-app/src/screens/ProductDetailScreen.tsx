@@ -1,10 +1,29 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, ScrollView, Image, StyleSheet, Linking, Alert, Share, TouchableOpacity } from 'react-native';
 import { Text, Button, Card, Avatar, Divider, Chip, IconButton, useTheme } from 'react-native-paper';
 import GMap from '../components/GMap';
+import { EditListingModal } from '../components/EditListingModal';
+import { doc, deleteDoc, db, onSnapshot, setDoc } from '../services/firebase';
 
 export default function ProductDetailScreen({ route, navigation, user }: any) {
-  const { part } = route.params || {};
+  const { part: initialPart } = route.params || {};
+  const [part, setPart] = useState<any>(initialPart);
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  useEffect(() => {
+    if (initialPart?.id) {
+      setPart(initialPart);
+      const unsub = onSnapshot(doc(db, 'spareParts', initialPart.id), (docSnap) => {
+        if (docSnap.exists()) {
+          setPart({ id: docSnap.id, ...docSnap.data() });
+        }
+      }, (err) => {
+        console.warn('[ProductDetailScreen] Realtime sync error:', err);
+      });
+      return () => unsub();
+    }
+  }, [initialPart?.id]);
 
   if (!part) {
     return (
@@ -17,6 +36,11 @@ export default function ProductDetailScreen({ route, navigation, user }: any) {
     );
   }
 
+  // Determine ownership using the authenticated user's ID/UID and listing's owner/seller ID
+  const currentUserId = user?.uid || user?.id || null;
+  const listingOwnerId = part.ownerId || part.sellerId || part.userId || null;
+  const isOwner = Boolean(currentUserId && listingOwnerId && String(currentUserId) === String(listingOwnerId));
+
   const handleCall = () => {
     if (part.contactPhone) {
       Linking.openURL(`tel:${part.contactPhone}`);
@@ -25,12 +49,35 @@ export default function ProductDetailScreen({ route, navigation, user }: any) {
     }
   };
 
-  const handleChat = () => {
+  const handleChat = async () => {
     if (!user) {
       navigation.navigate('Auth');
       return;
     }
-    const chatId = `${part.id}_${user.uid}_${part.sellerId}`;
+    const currentUid = user.uid || user.id;
+    const sellerUid = part.sellerId || part.userId || part.ownerId || 'seller';
+    const chatId = `${part.id}_${currentUid}_${sellerUid}`;
+    
+    try {
+      const chatDocRef = doc(db, 'chats', chatId);
+      await setDoc(chatDocRef, {
+        id: chatId,
+        partId: part.id,
+        partTitle: part.title || 'Spare Part',
+        partImageUrl: part.imageUrl || '',
+        partPrice: part.price || 0,
+        buyerId: currentUid,
+        buyerName: user.displayName || user.name || user.email || 'Buyer',
+        sellerId: sellerUid,
+        sellerName: part.contactName || part.sellerName || 'Seller',
+        participants: [currentUid, sellerUid],
+        lastMessageText: '',
+        lastMessageAt: Date.now()
+      }, { merge: true });
+    } catch (e) {
+      console.warn('[ProductDetailScreen] Pre-creating chat doc:', e);
+    }
+
     navigation.navigate('ChatRoom', { chatId, part });
   };
 
@@ -43,6 +90,35 @@ export default function ProductDetailScreen({ route, navigation, user }: any) {
     } catch (error) {
       console.warn('Share error:', error);
     }
+  };
+
+  const handleDelete = () => {
+    Alert.alert(
+      'Delete Listing',
+      'Are you sure you want to permanently delete this listing? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsDeleting(true);
+              if (part.id) {
+                await deleteDoc(doc(db, 'spareParts', part.id));
+              }
+              Alert.alert('Listing Deleted', 'Your spare part listing has been permanently deleted.');
+              navigation.goBack();
+            } catch (err: any) {
+              console.warn('[ProductDetailScreen] Delete error:', err);
+              Alert.alert('Error', err.message || 'Failed to delete listing. Please try again.');
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -101,8 +177,8 @@ export default function ProductDetailScreen({ route, navigation, user }: any) {
 
         <Text variant="titleMedium" style={styles.sectionTitle}>Seller Location Map</Text>
         <GMap
-          latitude={part.latitude || 19.0760}
-          longitude={part.longitude || 72.8777}
+          latitude={part.latitude || part.lat || 19.0760}
+          longitude={part.longitude || part.lng || 72.8777}
           title={`${part.title} - ${part.location || 'India'}`}
           interactive={false}
           style={{ marginBottom: 16 }}
@@ -120,32 +196,75 @@ export default function ProductDetailScreen({ route, navigation, user }: any) {
               <IconButton 
                 {...props} 
                 icon="chevron-right" 
-                onPress={() => navigation.navigate('SellerProfile', { seller: { name: part.contactName, location: part.location } })} 
+                onPress={() => navigation.navigate('SellerProfile', { seller: { name: part.contactName, location: part.location, sellerId: part.sellerId || part.userId } })} 
               />
             )}
           />
         </Card>
 
-        <View style={styles.actionRow}>
-          <Button 
-            mode="contained" 
-            icon="message" 
-            onPress={handleChat} 
-            style={[styles.actionBtn, { flex: 1, marginRight: 8 }]}
-            buttonColor="#1565FF"
-          >
-            Chat
-          </Button>
-          <Button 
-            mode="outlined" 
-            icon="phone" 
-            onPress={handleCall} 
-            style={[styles.actionBtn, { flex: 1 }]}
-          >
-            Call Seller
-          </Button>
-        </View>
+        {/* Action Row: Owner (Edit/Delete) vs Buyer (Chat/Call) */}
+        {isOwner ? (
+          <View style={styles.actionRow}>
+            <Button 
+              mode="contained" 
+              icon="pencil" 
+              onPress={() => setEditModalVisible(true)} 
+              style={[styles.actionBtn, { flex: 1, marginRight: 8 }]}
+              buttonColor="#4F46E5"
+              textColor="#FFFFFF"
+              disabled={isDeleting}
+            >
+              Edit Listing
+            </Button>
+            <Button 
+              mode="contained" 
+              icon="delete-outline" 
+              onPress={handleDelete} 
+              style={[styles.actionBtn, { flex: 1 }]}
+              buttonColor="#DC2626"
+              textColor="#FFFFFF"
+              loading={isDeleting}
+              disabled={isDeleting}
+            >
+              Delete Listing
+            </Button>
+          </View>
+        ) : (
+          <View style={styles.actionRow}>
+            <Button 
+              mode="contained" 
+              icon="message" 
+              onPress={handleChat} 
+              style={[styles.actionBtn, { flex: 1, marginRight: 8 }]}
+              buttonColor="#1565FF"
+              textColor="#FFFFFF"
+            >
+              Chat
+            </Button>
+            <Button 
+              mode="outlined" 
+              icon="phone" 
+              onPress={handleCall} 
+              style={[styles.actionBtn, { flex: 1 }]}
+              textColor="#1565FF"
+            >
+              Call Seller
+            </Button>
+          </View>
+        )}
       </View>
+
+      {/* Edit Listing Modal for Owner */}
+      {isOwner && (
+        <EditListingModal
+          visible={editModalVisible}
+          onClose={() => setEditModalVisible(false)}
+          listing={part}
+          onSuccess={() => {
+            setEditModalVisible(false);
+          }}
+        />
+      )}
     </ScrollView>
   );
 }

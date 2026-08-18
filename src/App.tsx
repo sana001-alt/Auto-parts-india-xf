@@ -23,7 +23,10 @@ import {
   Image as ImageIcon,
   Tag,
   Layers,
-  Package
+  Package,
+  Edit3,
+  Trash2,
+  CheckCircle2
 } from "lucide-react";
 import AuthScreen from "./components/AuthScreen";
 import HomeScreen from "./components/HomeScreen";
@@ -38,7 +41,7 @@ import GMap from "./components/GMap";
 import NotificationsScreen from "./components/NotificationsScreen";
 import AdminDashboardScreen from "./components/AdminDashboardScreen";
 import { User, SparePart, Chat, Message, AppVersionConfig, Announcement } from "./types";
-import { fetchSpareParts, subscribeToAuth, getOrCreateChat, fetchUserChats, fetchSellerReviews, updateSparePartListing, updateUserProfile, subscribeToUserChats, subscribeToSpareParts, deleteSparePartListing, subscribeToUserNotifications, markChatNotificationsAsRead, subscribeToUserFavorites, addFavorite, removeFavorite, markMessagesAsDelivered, fetchAppVersionConfig, setUserPresence, subscribeToAnnouncements, registerFCMToken, setupFCMForegroundListener, saveFCMNotificationToFirestore } from "./lib/firebase";
+import { fetchSpareParts, subscribeToAuth, getOrCreateChat, fetchUserChats, fetchSellerReviews, updateSparePartListing, updateUserProfile, subscribeToUserChats, subscribeToSpareParts, deleteSparePartListing, subscribeToUserNotifications, markChatNotificationsAsRead, subscribeToUserFavorites, addFavorite, removeFavorite, markMessagesAsDelivered, fetchAppVersionConfig, setUserPresence, subscribeToAnnouncements, registerFCMToken, setupFCMForegroundListener, saveFCMNotificationToFirestore, auth } from "./lib/firebase";
 import { playNotificationSound, triggerVibration, showPushNotification, requestNotificationPermission } from "./utils/audioNotification";
 import { CURRENT_APP_VERSION, evaluateUpdateStatus } from "./utils/versionUtils";
 import { UpdateDialogModal } from "./components/UpdateDialogModal";
@@ -55,7 +58,7 @@ import PullToRefresh from "./components/PullToRefresh";
 import { Search as SearchIcon } from "lucide-react";
 
 export type NavScreen = 
-  | { type: "tab"; tab: "home" | "search" | "sell" | "messages" | "profile" | "chats" | "myads" | "account" }
+  | { type: "tab"; tab: "home" | "search" | "sell" | "messages" | "profile" | "chats" | "chat" | "myads" | "account" }
   | { type: "chat_room"; chat: Chat }
   | { type: "part_detail"; part: SparePart }
   | { type: "admin_dashboard" }
@@ -68,8 +71,9 @@ export function screenToPath(screen: NavScreen): string {
       if (screen.tab === "home") return "/";
       if (screen.tab === "search") return "/search";
       if (screen.tab === "sell") return "/sell";
-      if (screen.tab === "messages" || screen.tab === "chats") return "/messages";
-      if (screen.tab === "profile" || screen.tab === "account" || screen.tab === "myads") return "/profile";
+      if (screen.tab === "chat" || screen.tab === "messages" || screen.tab === "chats") return "/chat";
+      if (screen.tab === "myads") return "/myads";
+      if (screen.tab === "account" || screen.tab === "profile") return "/account";
       return `/${screen.tab}`;
     case "chat_room":
       return `/chat/${screen.chat.id}`;
@@ -129,8 +133,9 @@ function parseInitialScreenFromUrl(): NavScreen[] {
     const lower = pathname.toLowerCase();
     if (lower === "/search") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "search" }];
     if (lower === "/sell") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "sell" }];
-    if (lower === "/messages" || lower === "/chats") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "messages" }];
-    if (lower === "/profile" || lower === "/account" || lower === "/myads") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "profile" }];
+    if (lower === "/chat" || lower === "/chats" || lower === "/messages") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "chat" }];
+    if (lower === "/myads" || lower === "/my-ads") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "myads" }];
+    if (lower === "/account" || lower === "/profile") return [{ type: "tab", tab: "home" }, { type: "tab", tab: "account" }];
     if (lower === "/admin") return [{ type: "tab", tab: "home" }, { type: "admin_dashboard" }];
     if (lower === "/notifications") return [{ type: "tab", tab: "home" }, { type: "notifications" }];
   } catch (e) {
@@ -162,9 +167,9 @@ export default function App() {
   const activeTab = (() => {
     for (let i = navStack.length - 1; i >= 0; i--) {
       if (navStack[i].type === "tab") {
-        const tab = (navStack[i] as { type: "tab"; tab: "home" | "search" | "sell" | "messages" | "profile" | "chats" | "myads" | "account" }).tab;
-        if (tab === "chats") return "messages";
-        if (tab === "account" || tab === "myads") return "profile";
+        const tab = (navStack[i] as { type: "tab"; tab: "home" | "search" | "sell" | "messages" | "profile" | "chats" | "chat" | "myads" | "account" }).tab;
+        if (tab === "messages" || tab === "chats") return "chat";
+        if (tab === "profile") return "account";
         return tab;
       }
     }
@@ -335,6 +340,7 @@ export default function App() {
   }, [showUpdateModal, isForceUpdate, isGalleryOpen, showDetailedReviews, viewingPublicUser]);
 
   const [editingPart, setEditingPart] = useState<SparePart | null>(null);
+  const [partToDelete, setPartToDelete] = useState<SparePart | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type?: "success" | "error" } | null>(null);
   const [isDeletingPart, setIsDeletingPart] = useState(false);
@@ -355,9 +361,13 @@ export default function App() {
           }
           return item;
         }));
+        setParts(prev => prev.map(p => p.id === partId ? { ...p, ...updates } : p));
+        showToast("Listing updated successfully");
       }
     } catch (err: any) {
       setDeleteError(err.message || "Failed to update listing.");
+      showToast("Error updating listing: " + (err.message || String(err)), "error");
+      throw err;
     }
   };
 
@@ -708,10 +718,17 @@ export default function App() {
       }
     }
     setEditingPart(null);
+    setPartToDelete(null);
+    setNavStack((prevStack) => {
+      const filtered = prevStack.filter(item => !(item.type === "part_detail" && item.part.id === deletedPartId));
+      if (filtered.length > 0) {
+        return filtered;
+      }
+      return [{ type: "tab", tab: "home" }];
+    });
     try {
       window.history.replaceState({ index: 0, screen: { type: "tab", tab: "home" } }, "", "/");
     } catch (e) {}
-    setNavStack([{ type: "tab", tab: "home" }]);
   };
 
   const handleUpdateUser = async (updatedUser: User) => {
@@ -792,25 +809,33 @@ export default function App() {
   const handleToggleSold = async (partId: string) => {
     const partToToggle = parts.find(p => p.id === partId);
     if (!partToToggle) return;
-    const nextSoldState = !partToToggle.sold;
+    const nextSoldState = !(partToToggle.sold === true || partToToggle.status === "sold");
+    const nextStatus = nextSoldState ? "sold" : "active";
 
-    await updateSparePartListing(partId, { sold: nextSoldState });
+    try {
+      await updateSparePartListing(partId, { 
+        sold: nextSoldState, 
+        status: nextStatus 
+      });
 
-    setParts((prevParts) => 
-      prevParts.map((p) => p.id === partId ? { ...p, sold: nextSoldState } : p)
-    );
-    const localData = localStorage.getItem("autoparts_listings");
-    if (localData) {
-      const list: SparePart[] = JSON.parse(localData);
-      const updated = list.map((p) => p.id === partId ? { ...p, sold: nextSoldState } : p);
-      localStorage.setItem("autoparts_listings", JSON.stringify(updated));
-    }
-    setNavStack(prev => prev.map(item => {
-      if (item.type === "part_detail" && item.part.id === partId) {
-        return { ...item, part: { ...item.part, sold: nextSoldState } };
+      setParts((prevParts) => 
+        prevParts.map((p) => p.id === partId ? { ...p, sold: nextSoldState, status: nextStatus } : p)
+      );
+      const localData = localStorage.getItem("autoparts_listings");
+      if (localData) {
+        const list: SparePart[] = JSON.parse(localData);
+        const updated = list.map((p) => p.id === partId ? { ...p, sold: nextSoldState, status: nextStatus } : p);
+        localStorage.setItem("autoparts_listings", JSON.stringify(updated));
       }
-      return item;
-    }));
+      setNavStack(prev => prev.map(item => {
+        if (item.type === "part_detail" && item.part.id === partId) {
+          return { ...item, part: { ...item.part, sold: nextSoldState, status: nextStatus } };
+        }
+        return item;
+      }));
+    } catch (err) {
+      console.error("Error toggling sold state for part:", partId, err);
+    }
   };
 
   const handleUpdatePrice = async (partId: string, newPrice: number) => {
@@ -1025,9 +1050,9 @@ export default function App() {
                 </motion.div>
               )}
 
-              {activeTab === "messages" && (
+              {activeTab === "chat" && (
                 <motion.div 
-                  key="screen-messages"
+                  key="screen-chat"
                   initial={{ opacity: 0, x: 12 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -12 }}
@@ -1043,9 +1068,37 @@ export default function App() {
                 </motion.div>
               )}
 
-              {activeTab === "profile" && (
+              {activeTab === "myads" && (
                 <motion.div 
-                  key="screen-profile"
+                  key="screen-myads"
+                  initial={{ opacity: 0, x: 12 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, x: -12 }}
+                  transition={{ duration: 0.18, ease: "easeOut" }}
+                  className="absolute inset-0 flex flex-col overflow-hidden"
+                >
+                  <ProfileScreen
+                    currentUser={currentUser}
+                    activeTab="myads"
+                    onTabChange={(tab) => pushScreen({ type: "tab", tab })}
+                    onLogout={handleLogout}
+                    parts={parts}
+                    favorites={favorites}
+                    onPartDeleted={handlePartDeleted}
+                    onFavoriteToggle={handleFavoriteToggle}
+                    onViewPart={(part) => pushScreen({ type: "part_detail", part })}
+                    onUpdateUser={handleUpdateUser}
+                    onToggleSold={handleToggleSold}
+                    onUpdatePrice={handleUpdatePrice}
+                    onOpenAdminDashboard={() => pushScreen({ type: "admin_dashboard" })}
+                    onOpenUserProfile={(id, name) => setViewingPublicUser({ id, name })}
+                  />
+                </motion.div>
+              )}
+
+              {activeTab === "account" && (
+                <motion.div 
+                  key="screen-account"
                   initial={{ opacity: 0, x: 12 }}
                   animate={{ opacity: 1, x: 0 }}
                   exit={{ opacity: 0, x: -12 }}
@@ -1093,15 +1146,24 @@ export default function App() {
                   </span>
                 </button>
 
-                {/* 2. Search Tab */}
+                {/* 2. Chat Tab */}
                 <button
-                  onClick={() => pushScreen({ type: "tab", tab: "search" })}
+                  onClick={() => pushScreen({ type: "tab", tab: "chat" })}
                   className="flex-1 flex flex-col items-center justify-center py-1 relative cursor-pointer active:scale-90 transition-transform"
-                  id="nav-tab-search"
+                  id="nav-tab-chat"
                 >
-                  <SearchIcon size={18} className={activeTab === "search" ? "text-[#2563EB]" : "text-slate-500"} />
-                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "search" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
-                    Search
+                  <div className="relative">
+                    <MessageSquare size={18} className={activeTab === "chat" ? "text-[#2563EB]" : "text-slate-500"} />
+                    {(Object.values(unreadCounts) as number[]).reduce((sum, count) => sum + count, 0) > 0 && (
+                      <div className="absolute -top-1.5 -right-2 bg-rose-600 text-white h-4 min-w-4 px-1 rounded-full flex items-center justify-center shadow-xs">
+                        <span className="text-white text-[8px] font-black leading-none">
+                          {(Object.values(unreadCounts) as number[]).reduce((sum, count) => sum + count, 0)}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "chat" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
+                    Chat
                   </span>
                 </button>
 
@@ -1119,36 +1181,27 @@ export default function App() {
                   </span>
                 </div>
 
-                {/* 4. Messages Tab */}
+                {/* 4. My Ads Tab */}
                 <button
-                  onClick={() => pushScreen({ type: "tab", tab: "messages" })}
+                  onClick={() => pushScreen({ type: "tab", tab: "myads" })}
                   className="flex-1 flex flex-col items-center justify-center py-1 relative cursor-pointer active:scale-90 transition-transform"
-                  id="nav-tab-messages"
+                  id="nav-tab-myads"
                 >
-                  <div className="relative">
-                    <MessageSquare size={18} className={activeTab === "messages" ? "text-[#2563EB]" : "text-slate-500"} />
-                    {(Object.values(unreadCounts) as number[]).reduce((sum, count) => sum + count, 0) > 0 && (
-                      <div className="absolute -top-1.5 -right-2 bg-rose-600 text-white h-4 min-w-4 px-1 rounded-full flex items-center justify-center shadow-xs">
-                        <span className="text-white text-[8px] font-black leading-none">
-                          {(Object.values(unreadCounts) as number[]).reduce((sum, count) => sum + count, 0)}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "messages" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
-                    Messages
+                  <Package size={18} className={activeTab === "myads" ? "text-[#2563EB]" : "text-slate-500"} />
+                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "myads" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
+                    My Ads
                   </span>
                 </button>
 
-                {/* 5. Profile Tab */}
+                {/* 5. Account Tab */}
                 <button
-                  onClick={() => pushScreen({ type: "tab", tab: "profile" })}
+                  onClick={() => pushScreen({ type: "tab", tab: "account" })}
                   className="flex-1 flex flex-col items-center justify-center py-1 relative cursor-pointer active:scale-90 transition-transform"
-                  id="nav-tab-profile"
+                  id="nav-tab-account"
                 >
-                  <UserIcon size={18} className={activeTab === "profile" ? "text-[#2563EB]" : "text-slate-500"} />
-                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "profile" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
-                    Profile
+                  <UserIcon size={18} className={activeTab === "account" ? "text-[#2563EB]" : "text-slate-500"} />
+                  <span className={`text-[10px] mt-0.5 tracking-tight ${activeTab === "account" ? "text-[#2563EB] font-bold" : "text-slate-500 font-medium"}`}>
+                    Account
                   </span>
                 </button>
               </div>
@@ -1219,7 +1272,7 @@ export default function App() {
               </div>
 
               {/* Scrollable Content */}
-              <div className="flex-1 overflow-y-auto pb-24 bg-slate-50">
+              <div className="flex-1 overflow-y-auto pb-44 bg-slate-50">
                 {(() => {
                   const imageList: string[] = [];
                   if (detailedPart.imageUrls && detailedPart.imageUrls.length > 0) {
@@ -1385,7 +1438,7 @@ export default function App() {
                         </div>
                       </div>
                       <a
-                        href={`https://www.openstreetmap.org/?mlat=${detailedPart.lat || 28.6139}&mlon=${detailedPart.lng || 77.2090}#map=16/${detailedPart.lat || 28.6139}/${detailedPart.lng || 77.2090}`}
+                        href={`https://www.google.com/maps/dir/?api=1&destination=${detailedPart.lat || 28.6139},${detailedPart.lng || 77.2090}`}
                         target="_blank"
                         rel="noopener noreferrer"
                         className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-50 hover:bg-blue-100 text-blue-700 text-xs font-bold rounded-xl border border-blue-200 transition-colors shadow-2xs cursor-pointer active:scale-95"
@@ -1434,73 +1487,102 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Sticky Bottom Action Bar */}
-              <div className="absolute bottom-0 inset-x-0 bg-white border-t border-slate-200 p-3 flex flex-row items-center gap-3 z-20">
-                {currentUser && (detailedPart.sellerId === currentUser.id || currentUser.role === "super_admin" || currentUser.email === "wwwautoparts2@gmail.com" || currentUser.email === "ym1950394@gmail.com") ? (
-                  <>
-                    <button
-                      onClick={() => setEditingPart(detailedPart)}
-                      className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-md font-black text-xs uppercase text-center cursor-pointer transition-colors"
-                      id="edit-own-listing-btn"
-                    >
-                      Edit Listing
-                    </button>
-                    <button
-                      onClick={async () => {
-                        if (window.confirm("Are you sure you want to permanently delete this listing?")) {
-                          try {
-                            setIsDeletingPart(true);
-                            const targetId = detailedPart.id;
-                            const ok = await deleteSparePartListing(targetId);
-                            if (ok) {
-                              setEditingPart(null);
-                              await handlePartDeleted(targetId);
-                              showToast("Listing deleted successfully");
-                            } else {
-                              showToast("Failed to delete listing.", "error");
-                            }
-                          } catch (err: any) {
-                            showToast("Error deleting listing: " + (err.message || String(err)), "error");
-                          } finally {
-                            setIsDeletingPart(false);
+              {/* Sticky Bottom Action Bar - Visibly elevated above bottom navigation bar */}
+              <div 
+                className="absolute bottom-[66px] sm:bottom-[70px] inset-x-0 bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 p-3 flex flex-row items-center gap-3 z-30 shadow-[0_-6px_20px_rgba(0,0,0,0.08)]"
+                id="ad-details-action-bar"
+              >
+                {(() => {
+                  const currentUid = auth?.currentUser?.uid || currentUser?.uid || currentUser?.id || null;
+                  const currentEmail = (auth?.currentUser?.email || currentUser?.email || "").toLowerCase();
+                  const listingOwnerId = detailedPart.ownerId || (detailedPart as any).sellerId || (detailedPart as any).userId || null;
+                  const listingSellerEmail = (detailedPart.sellerEmail || "").toLowerCase();
+
+                  const isOwner = Boolean(
+                    (currentUid && listingOwnerId && (currentUid === listingOwnerId || String(currentUid) === String(listingOwnerId))) ||
+                    (currentEmail && listingSellerEmail && currentEmail === listingSellerEmail) ||
+                    currentUser?.isAdmin ||
+                    currentUser?.isSuperAdmin ||
+                    currentUser?.role === "admin" ||
+                    currentEmail === "wwwautoparts2@gmail.com" ||
+                    currentEmail === "ym1950394@gmail.com" ||
+                    currentEmail === "www.allahforgiveness877@gmail.com"
+                  );
+
+                  if (isOwner) {
+                    const isSold = detailedPart.sold === true || detailedPart.status === "sold";
+                    return (
+                      <>
+                        <button
+                          onClick={() => setEditingPart(detailedPart)}
+                          className="flex-1 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white py-3 px-2 rounded-xl font-black text-xs uppercase text-center cursor-pointer transition-all shadow-xs flex items-center justify-center gap-1.5"
+                          id="edit-own-listing-btn"
+                        >
+                          <Edit3 size={15} />
+                          <span>Edit</span>
+                        </button>
+                        <button
+                          onClick={() => handleToggleSold(detailedPart.id)}
+                          className={`flex-1 active:scale-[0.98] text-white py-3 px-2 rounded-xl font-black text-xs uppercase text-center cursor-pointer transition-all shadow-xs flex items-center justify-center gap-1.5 ${
+                            isSold
+                              ? "bg-emerald-600 hover:bg-emerald-700"
+                              : "bg-amber-600 hover:bg-amber-700"
+                          }`}
+                          id="toggle-sold-own-listing-btn"
+                        >
+                          <CheckCircle2 size={15} />
+                          <span>{isSold ? "Mark Active" : "Mark Sold"}</span>
+                        </button>
+                        <button
+                          onClick={() => setPartToDelete(detailedPart)}
+                          disabled={isDeletingPart}
+                          className="flex-1 bg-rose-600 hover:bg-rose-700 active:scale-[0.98] text-white py-3 px-2 rounded-xl font-black text-xs uppercase text-center cursor-pointer transition-all shadow-xs disabled:opacity-50 flex items-center justify-center gap-1.5"
+                          id="delete-own-listing-btn"
+                        >
+                          <Trash2 size={15} />
+                          <span>{isDeletingPart && partToDelete?.id === detailedPart.id ? "Deleting..." : "Delete"}</span>
+                        </button>
+                      </>
+                    );
+                  }
+
+                  return (
+                    <>
+                      <button
+                        onClick={() => {
+                          if (detailedPart.sold) return;
+                          handleStartChat(detailedPart);
+                        }}
+                        disabled={detailedPart.sold}
+                        className={`flex-1 flex flex-row items-center justify-center gap-2 py-3 px-3 rounded-xl font-black text-xs uppercase cursor-pointer transition-all shadow-xs active:scale-[0.98] ${
+                          detailedPart.sold 
+                            ? "bg-slate-200 dark:bg-slate-800 text-slate-400 dark:text-slate-500 cursor-not-allowed" 
+                            : "bg-teal-600 hover:bg-teal-700 text-white"
+                        }`}
+                        id="inapp-chat-btn"
+                      >
+                        <MessageSquare size={15} className={detailedPart.sold ? "text-slate-400" : "text-white"} />
+                        <span className={`font-black text-xs uppercase ${detailedPart.sold ? "text-slate-400" : "text-white"}`}>
+                          {detailedPart.sold ? t("soldOut") : "Chat Now"}
+                        </span>
+                      </button>
+                      <a
+                        href={detailedPart.contactPhone ? `tel:${detailedPart.contactPhone}` : undefined}
+                        onClick={(e) => {
+                          if (!detailedPart.contactPhone) {
+                            e.preventDefault();
+                            alert("No phone number provided for this seller.");
                           }
-                        }
-                      }}
-                      disabled={isDeletingPart}
-                      className="flex-1 bg-rose-600 hover:bg-rose-700 text-white py-3 rounded-md font-black text-xs uppercase text-center cursor-pointer transition-colors disabled:opacity-50"
-                      id="delete-own-listing-btn"
-                    >
-                      {isDeletingPart ? "Deleting..." : "Delete Listing"}
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <button
-                      onClick={() => {
-                        if (detailedPart.sold) return;
-                        handleStartChat(detailedPart);
-                      }}
-                      disabled={detailedPart.sold}
-                      className={`flex-1 flex flex-row items-center justify-center gap-2 py-3 rounded-md font-black text-xs uppercase cursor-pointer transition-colors ${
-                        detailedPart.sold ? "bg-slate-100 text-slate-400 cursor-not-allowed" : "bg-teal-600 hover:bg-teal-700 text-white"
-                      }`}
-                      id="inapp-chat-btn"
-                    >
-                      <MessageSquare size={14} className={detailedPart.sold ? "text-slate-400" : "text-white"} />
-                      <span className={`font-black text-xs uppercase ${detailedPart.sold ? "text-slate-400" : "text-white"}`}>
-                        {detailedPart.sold ? t("soldOut") : "Chat Now"}
-                      </span>
-                    </button>
-                    <a
-                      href={`tel:${detailedPart.contactPhone}`}
-                      className="flex-1 flex flex-row items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white py-3 rounded-md font-black text-xs uppercase text-center transition-colors"
-                      id="call-seller-btn"
-                    >
-                      <Phone size={13} className="text-white" />
-                      <span className="text-white font-black text-xs uppercase">{t("callSeller")}</span>
-                    </a>
-                  </>
-                )}
+                        }}
+                        className="flex-1 flex flex-row items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 active:scale-[0.98] text-white py-3 px-3 rounded-xl font-black text-xs uppercase text-center transition-all shadow-xs cursor-pointer"
+                        id="call-seller-btn"
+                      >
+                        <Phone size={15} className="text-white" />
+                        <span className="text-white font-black text-xs uppercase">{t("callSeller")}</span>
+                      </a>
+                    </>
+                  );
+                })()}
               </div>
             </div>
           )}
@@ -1588,6 +1670,58 @@ export default function App() {
                 }
               }}
             />
+          )}
+
+          {partToDelete && (
+            <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="app-delete-listing-dialog">
+              <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150 border border-slate-100 dark:border-slate-800 text-slate-900 dark:text-white">
+                <div className="w-12 h-12 rounded-2xl bg-rose-100 dark:bg-rose-950 text-rose-600 dark:text-rose-400 flex items-center justify-center mx-auto shadow-xs">
+                  <Trash2 size={24} />
+                </div>
+                <div className="text-center space-y-1.5">
+                  <h3 className="font-extrabold text-slate-900 dark:text-white text-base">Delete Listing?</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 leading-relaxed font-medium">
+                    Are you sure you want to permanently delete <span className="font-bold text-slate-700 dark:text-slate-200">"{partToDelete.title}"</span>? All listing data and photos will be removed from Firestore. This action cannot be undone.
+                  </p>
+                </div>
+                <div className="flex gap-2.5 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => setPartToDelete(null)}
+                    disabled={isDeletingPart}
+                    className="flex-1 py-3 px-4 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      try {
+                        setIsDeletingPart(true);
+                        const targetId = partToDelete.id;
+                        const ok = await deleteSparePartListing(targetId);
+                        if (ok) {
+                          setPartToDelete(null);
+                          setEditingPart(null);
+                          await handlePartDeleted(targetId);
+                          showToast("Listing deleted successfully");
+                        } else {
+                          showToast("Failed to delete listing.", "error");
+                        }
+                      } catch (err: any) {
+                        showToast("Error deleting listing: " + (err.message || String(err)), "error");
+                      } finally {
+                        setIsDeletingPart(false);
+                      }
+                    }}
+                    disabled={isDeletingPart}
+                    className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-xs font-extrabold text-white shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+                  >
+                    {isDeletingPart ? "Deleting..." : "Yes, Delete"}
+                  </button>
+                </div>
+              </div>
+            </div>
           )}
 
           {toast && (

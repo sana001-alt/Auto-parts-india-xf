@@ -69,6 +69,8 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
     districts: {}
   });
 
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
   useEffect(() => {
     const unsub = subscribeToTaxonomyConfig((full) => {
       setTaxonomy({
@@ -87,6 +89,37 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
   const [lat, setLat] = useState<number | undefined>(part.lat);
   const [lng, setLng] = useState<number | undefined>(part.lng);
   const [showMapModal, setShowMapModal] = useState(false);
+
+  // Sync local states if part prop changes or refreshes
+  useEffect(() => {
+    if (part) {
+      setTitle(part.title || "");
+      setDescription(part.description || "");
+      setPrice(part.price !== undefined && part.price !== null ? String(part.price) : "");
+      setCarBrand(part.carBrand || "");
+      setCarModel(part.carModel || "");
+      setCarVariant(part.carVariant || "");
+      setCategory(part.category || "");
+      setPartName(part.partName || "");
+      setCondition(part.condition || "Brand New");
+      setSelectedState(part.state || "");
+      setSelectedDistrict(part.district || "");
+      setSelectedArea(part.area || "");
+      setContactName(part.contactName || part.sellerName || "");
+      setContactPhone(part.contactPhone || "");
+      setUploadedImages(
+        part.imageUrls && part.imageUrls.length > 0
+          ? part.imageUrls
+          : part.images && part.images.length > 0
+          ? part.images
+          : part.imageUrl
+          ? [part.imageUrl]
+          : []
+      );
+      setLat(part.lat);
+      setLng(part.lng);
+    }
+  }, [part]);
   
   const [isSaving, setIsSaving] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
@@ -95,10 +128,57 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
   const [showUrlInput, setShowUrlInput] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const availableModels = carBrand ? taxonomy.brands[carBrand] || [] : [];
-  const availableVariants = carModel ? (taxonomy.variants[carModel] || taxonomy.variants[`${carBrand}_${carModel}`] || ["Base", "Mid", "Top Spec", "VXi", "ZXi", "SX", "Alpha", "GT", "LXi"]) : [];
-  const availablePartNames = category ? taxonomy.subcategories[category] || [] : [];
-  const availableDistricts = selectedState ? taxonomy.districts[selectedState] || [] : [];
+  // Robust options with immediate fallback to static data and pre-filled current values
+  const allBrands = Object.keys(taxonomy.brands || {}).length > 0 
+    ? Object.keys(taxonomy.brands) 
+    : Object.keys(INDIAN_CAR_BRANDS);
+  const brandOptions = Array.from(new Set([carBrand, ...allBrands])).filter(Boolean);
+
+  const fallbackModels = carBrand && (INDIAN_CAR_BRANDS as any)[carBrand] ? (INDIAN_CAR_BRANDS as any)[carBrand] : [];
+  const dynamicModels = carBrand && taxonomy.brands ? taxonomy.brands[carBrand] || [] : [];
+  const allModels = dynamicModels.length > 0 ? dynamicModels : fallbackModels;
+  const modelOptions = Array.from(new Set([carModel, ...allModels])).filter(Boolean);
+
+  const dynamicVariants = carModel 
+    ? (taxonomy.variants?.[carModel] || taxonomy.variants?.[`${carBrand}_${carModel}`] || []) 
+    : [];
+  const fallbackVariants = DEFAULT_MODEL_VARIANTS || ["Base", "Mid", "Top Spec", "VXi", "ZXi", "SX", "Alpha", "GT", "LXi"];
+  const allVariants = dynamicVariants.length > 0 ? dynamicVariants : fallbackVariants;
+  const variantOptions = Array.from(new Set([carVariant, ...allVariants])).filter(Boolean);
+
+  const dynamicCategories = taxonomy.categories || [];
+  const allCategories = dynamicCategories.length > 0 ? dynamicCategories : CAR_PART_CATEGORIES;
+  const categoryOptions = Array.from(new Set([category, ...allCategories])).filter(Boolean);
+
+  const dynamicParts = category && taxonomy.subcategories ? taxonomy.subcategories[category] || [] : [];
+  const fallbackParts = category && (CAR_SPARE_PARTS_BY_CATEGORY as any)[category] ? (CAR_SPARE_PARTS_BY_CATEGORY as any)[category] : [];
+  const allParts = dynamicParts.length > 0 ? dynamicParts : fallbackParts;
+  const partNameOptions = Array.from(new Set([partName, ...allParts])).filter(Boolean);
+
+  const dynamicStates = taxonomy.states || [];
+  const fallbackStates = INDIAN_STATES_AND_DISTRICTS.map((s) => s.state);
+  const allStates = dynamicStates.length > 0 ? dynamicStates : fallbackStates;
+  const stateOptions = Array.from(new Set([selectedState, ...allStates])).filter(Boolean);
+
+  const dynamicDistricts = selectedState && taxonomy.districts ? taxonomy.districts[selectedState] || [] : [];
+  const fallbackDistricts = selectedState ? (INDIAN_STATES_AND_DISTRICTS.find((s) => s.state === selectedState)?.districts || []) : [];
+  const allDistricts = dynamicDistricts.length > 0 ? dynamicDistricts : fallbackDistricts;
+  const districtOptions = Array.from(new Set([selectedDistrict, ...allDistricts])).filter(Boolean);
+
+  const formatIndianCurrency = (val: string | number | undefined | null) => {
+    if (val === undefined || val === null || val === "") return "";
+    const clean = String(val).replace(/[^0-9]/g, "");
+    if (!clean) return "";
+    const num = parseInt(clean, 10);
+    if (isNaN(num)) return "";
+    return num.toLocaleString("en-IN");
+  };
+
+  const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const rawDigits = raw.replace(/[^0-9]/g, "");
+    setPrice(rawDigits);
+  };
 
   const handleBrandChange = (brand: string) => {
     setCarBrand(brand);
@@ -194,8 +274,9 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
       return;
     }
 
-    const priceNum = parseFloat(price);
-    if (isNaN(priceNum) || priceNum <= 0) {
+    const cleanPriceDigits = String(price).replace(/[^0-9.]/g, "");
+    const priceNum = parseFloat(cleanPriceDigits);
+    if (!cleanPriceDigits || isNaN(priceNum) || priceNum <= 0) {
       setError("Please specify a valid positive price in ₹.");
       return;
     }
@@ -252,22 +333,24 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
     }
   };
 
-  const handleDelete = async () => {
-    if (window.confirm("Are you sure you want to permanently delete this listing? All photos will be removed from Cloudinary storage.")) {
-      setIsDeleting(true);
-      setError(null);
-      try {
-        if (onDelete) {
-          await onDelete(part.id);
-        } else {
-          await deleteSparePartListing(part.id);
-        }
-        onClose();
-      } catch (err: any) {
-        setError(err.message || "Failed to delete listing.");
-      } finally {
-        setIsDeleting(false);
+  const handleDelete = () => {
+    setShowDeleteConfirm(true);
+  };
+
+  const confirmPermanentDelete = async () => {
+    setIsDeleting(true);
+    setError(null);
+    try {
+      if (onDelete) {
+        await onDelete(part.id);
+      } else {
+        await deleteSparePartListing(part.id);
       }
+      setShowDeleteConfirm(false);
+      onClose();
+    } catch (err: any) {
+      setError(err.message || "Failed to delete listing.");
+      setIsDeleting(false);
     }
   };
 
@@ -422,7 +505,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                   required
                 >
                   <option value="">Choose Brand</option>
-                  {Object.keys(taxonomy.brands).map((b) => (
+                  {brandOptions.map((b) => (
                     <option key={b} value={b}>{b}</option>
                   ))}
                 </select>
@@ -441,7 +524,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                   required
                 >
                   <option value="">Choose Model</option>
-                  {availableModels.map((m) => (
+                  {modelOptions.map((m) => (
                     <option key={m} value={m}>{m}</option>
                   ))}
                 </select>
@@ -459,7 +542,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                   className="w-full bg-slate-50 disabled:opacity-50 border border-slate-200 rounded-xl py-2.5 pl-8 pr-1 text-xs text-slate-700 focus:outline-none focus:border-indigo-500 cursor-pointer appearance-none font-bold"
                 >
                   <option value="">Variant</option>
-                  {availableVariants.map((v) => (
+                  {variantOptions.map((v) => (
                     <option key={v} value={v}>{v}</option>
                   ))}
                 </select>
@@ -480,7 +563,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                   required
                 >
                   <option value="">{t("selectCategory")}</option>
-                  {taxonomy.categories.map((cat) => (
+                  {categoryOptions.map((cat) => (
                     <option key={cat} value={cat}>{translateDynamic(cat, language)}</option>
                   ))}
                 </select>
@@ -499,7 +582,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                   required
                 >
                   <option value="">Select Specific Part</option>
-                  {availablePartNames.map((part) => (
+                  {partNameOptions.map((part) => (
                     <option key={part} value={part}>{part}</option>
                   ))}
                 </select>
@@ -538,11 +621,13 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
               <div className="relative">
                 <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-700 text-xs font-black font-mono z-10 pointer-events-none">₹</span>
                 <input
-                  type="number"
-                  value={price}
-                  onChange={(e) => setPrice(e.target.value)}
-                  placeholder="e.g. 4500"
+                  type="text"
+                  inputMode="numeric"
+                  value={price ? formatIndianCurrency(price) : ""}
+                  onChange={handlePriceChange}
+                  placeholder="e.g. 4,500"
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-8 pr-4 text-xs font-bold text-slate-700 font-mono focus:outline-none focus:border-indigo-500"
+                  id="edit-listing-price"
                 />
               </div>
             </div>
@@ -562,8 +647,8 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                     required
                   >
                     <option value="">Choose State</option>
-                    {INDIAN_STATES_AND_DISTRICTS.map((s) => (
-                      <option key={s.state} value={s.state}>{s.state}</option>
+                    {stateOptions.map((st) => (
+                      <option key={st} value={st}>{st}</option>
                     ))}
                   </select>
                 </div>
@@ -581,7 +666,7 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
                     required
                   >
                     <option value="">Choose District</option>
-                    {availableDistricts.map((d) => (
+                    {districtOptions.map((d) => (
                       <option key={d} value={d}>{d}</option>
                     ))}
                   </select>
@@ -721,6 +806,40 @@ export default function EditListingModal({ part, onClose, onSave, onDelete }: Ed
           </div>
         </div>
       </div>
+
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4" id="delete-confirmation-modal">
+          <div className="bg-white rounded-3xl p-6 max-w-sm w-full shadow-2xl space-y-4 animate-in fade-in zoom-in-95 duration-150 border border-slate-100">
+            <div className="w-12 h-12 rounded-2xl bg-rose-100 text-rose-600 flex items-center justify-center mx-auto shadow-xs">
+              <Trash2 size={24} />
+            </div>
+            <div className="text-center space-y-1">
+              <h3 className="font-extrabold text-slate-900 text-base">Delete Listing?</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-medium">
+                Are you sure you want to permanently delete <span className="font-bold text-slate-700">"{title || part.title}"</span>? This will remove all photos and details from Firestore and Cloudinary. This action cannot be undone.
+              </p>
+            </div>
+            <div className="flex gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={isDeleting}
+                className="flex-1 py-3 px-4 rounded-xl border border-slate-200 text-xs font-bold text-slate-700 hover:bg-slate-50 transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmPermanentDelete}
+                disabled={isDeleting}
+                className="flex-1 py-3 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-xs font-extrabold text-white shadow-md transition-colors cursor-pointer flex items-center justify-center gap-1.5 disabled:opacity-50"
+              >
+                {isDeleting ? "Deleting..." : "Yes, Delete"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showMapModal && (
         <MapLocationModal

@@ -121,16 +121,20 @@ export default function SellScreen({ currentUser, onPublishSuccess, parts }: Sel
   const availablePartNames = category ? taxonomy.subcategories[category] || [] : [];
   const availableDistricts = selectedState ? taxonomy.districts[selectedState] || [] : [];
 
-  // Helper to format currency in Indian numbering format (e.g., 2500 -> 2,500 ; 200000 -> 2,00,000)
-  const formatIndianCurrency = (val: string) => {
-    const clean = val.replace(/\D/g, "");
+  // Helper to format currency in Indian numbering format (e.g., 2500 -> 2,500 ; 857895 -> 8,57,895)
+  const formatIndianCurrency = (val: string | number | undefined | null) => {
+    if (val === undefined || val === null || val === "") return "";
+    const clean = String(val).replace(/[^0-9]/g, "");
     if (!clean) return "";
     const num = parseInt(clean, 10);
+    if (isNaN(num)) return "";
     return num.toLocaleString("en-IN");
   };
 
   const handlePriceChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const rawDigits = e.target.value.replace(/\D/g, "");
+    const raw = e.target.value;
+    // Strip out currency symbols (₹, Rs, etc.), commas, dots, spaces, letters
+    const rawDigits = raw.replace(/[^0-9]/g, "");
     setPrice(rawDigits);
   };
 
@@ -326,8 +330,9 @@ export default function SellScreen({ currentUser, onPublishSuccess, parts }: Sel
       setError("Please provide an Ad Title.");
       return;
     }
-    const priceNum = parseFloat(price);
-    if (!price || isNaN(priceNum) || priceNum <= 0) {
+    const cleanPriceDigits = String(price).replace(/[^0-9.]/g, "");
+    const priceNum = parseFloat(cleanPriceDigits);
+    if (!cleanPriceDigits || isNaN(priceNum) || priceNum <= 0) {
       setError("Please specify a valid Price in ₹.");
       return;
     }
@@ -559,7 +564,7 @@ export default function SellScreen({ currentUser, onPublishSuccess, parts }: Sel
       </div>
 
       {/* Main Single-Page Scrollable Form */}
-      <form onSubmit={handlePublish} className="flex-1 overflow-y-auto p-3.5 sm:p-5 pb-28 max-w-2xl mx-auto w-full space-y-4">
+      <form noValidate onSubmit={handlePublish} className="flex-1 overflow-y-auto p-3.5 sm:p-5 pb-28 max-w-2xl mx-auto w-full space-y-4">
         {/* Error Notification */}
         {error && (
           <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-700 flex items-start gap-2 shadow-xs animate-shake">
@@ -964,14 +969,12 @@ export default function SellScreen({ currentUser, onPublishSuccess, parts }: Sel
                 <input
                   type="text"
                   inputMode="numeric"
-                  pattern="[0-9]*"
                   value={price ? formatIndianCurrency(price) : ""}
                   onChange={handlePriceChange}
                   placeholder="e.g. 2,500"
                   className={`w-full bg-slate-50 focus:bg-white border rounded-xl py-2 pl-7 pr-3 text-xs font-black text-slate-900 focus:outline-none focus:ring-2 focus:ring-slate-900/20 focus:border-slate-900 font-mono transition-all ${
-                    submittedAttempt && !price ? "border-rose-400 bg-rose-50/30" : "border-slate-200"
+                    submittedAttempt && (!price || parseFloat(String(price).replace(/[^0-9.]/g, "") || "0") <= 0) ? "border-rose-400 bg-rose-50/30" : "border-slate-200"
                   }`}
-                  required
                   id="listing-price"
                 />
               </div>
