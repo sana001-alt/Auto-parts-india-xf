@@ -4,6 +4,7 @@ apply plugin: "com.facebook.react"
 
 react {
     /* Folders, entrypoint, etc. */
+    autolinkLibrariesWithApp()
 }
 
 android {
