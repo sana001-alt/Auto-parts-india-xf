@@ -62,9 +62,8 @@ jobs:
       - name: Clean Conflicting & Duplicate Resources
         run: |
           echo "==== Step 1: Cleaning conflicting ic_launcher_background.xml files ===="
-          # If ic_launcher_background.xml is in a drawable directory and also in values/ as a color, AAPT resource compilation will fail with duplicate / mismatch errors.
-          # We force delete any duplicate XML file with that name outside of values directory to ensure only colors.xml definition is used.
-          find react-native-app/android/app/src/main/res -name "ic_launcher_background.xml" ! -path "*/values/*" -exec rm -f {} \;
+          # Clean all ic_launcher_background.xml files so color is solely defined in values/colors.xml
+          find react-native-app/android/app/src/main/res -name "ic_launcher_background.xml" -exec rm -f {} \;
           
           echo "==== Step 2: Preventing duplicate asset resources ===="
           # npx react-native bundle often dumps asset files in android/app/src/main/res/drawable-* folders.

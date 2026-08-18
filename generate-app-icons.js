@@ -267,11 +267,11 @@ async function main() {
 </resources>
 `);
 
-    fs.writeFileSync(path.join(valuesDir, 'ic_launcher_background.xml'), `<?xml version="1.0" encoding="utf-8"?>
-<resources>
-    <color name="ic_launcher_background">#0B1220</color>
-</resources>
-`);
+    // Clean up any redundant ic_launcher_background.xml if present
+    const legacyBgXml = path.join(valuesDir, 'ic_launcher_background.xml');
+    if (fs.existsSync(legacyBgXml)) {
+      try { fs.unlinkSync(legacyBgXml); } catch (e) {}
+    }
 
     // Write mipmap-anydpi-v26 XMLs
     const v26Dir = path.join(resDir, 'mipmap-anydpi-v26');
