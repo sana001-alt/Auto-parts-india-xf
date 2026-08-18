@@ -89,6 +89,56 @@ jobs:
           gradle wrapper --gradle-version 8.8
           chmod +x gradlew
 
+      - name: Ensure google-services.json
+        run: |
+          cd react-native-app/android/app
+          if [ ! -f "google-services.json" ]; then
+            echo "google-services.json is missing, creating configuration..."
+            cat << 'EOF' > google-services.json
+          {
+            "project_info": {
+              "project_number": "751764116522",
+              "project_id": "auto-parts-market-place-20312",
+              "storage_bucket": "auto-parts-market-place-20312.firebasestorage.app"
+            },
+            "client": [
+              {
+                "client_info": {
+                  "mobilesdk_app_id": "1:751764116522:android:9d4586f4a8e2b8109d1234",
+                  "android_client_info": {
+                    "package_name": "com.autopartsindia"
+                  }
+                },
+                "oauth_client": [
+                  {
+                    "client_id": "751764116522-gr59kobj3c3i1hsgr5hiumauk5otr5sq.apps.googleusercontent.com",
+                    "client_type": 3
+                  }
+                ],
+                "api_key": [
+                  {
+                    "current_key": "AIzaSyAGYut7q3nCW-qSDPSldGSbxAjnna_-bvo"
+                  }
+                ],
+                "services": {
+                  "appinvite_service": {
+                    "other_platform_oauth_client": [
+                      {
+                        "client_id": "751764116522-gr59kobj3c3i1hsgr5hiumauk5otr5sq.apps.googleusercontent.com",
+                        "client_type": 3
+                      }
+                    ]
+                  }
+                }
+              }
+            ],
+            "configuration_version": "1"
+          }
+          EOF
+          else
+            echo "google-services.json is already present."
+          fi
+
       - name: Ensure Debug Keystore
         run: |
           cd react-native-app/android/app
